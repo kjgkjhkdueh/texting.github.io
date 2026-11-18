@@ -111,13 +111,13 @@ $("newBtn").onclick = () => {
 };
 
 // ---- REAL ONLINE MULTIPLAYER (Supabase Realtime) ----
-// 1) Create a free project at https://supabase.com
-// 2) In Project Settings > API, copy Project URL and anon/public key below.
-// 3) In Supabase > Database > Replication / Realtime, make sure Realtime is enabled.
+// Use a Supabase Project URL and a browser-safe Publishable key.
 const SUPABASE_URL = "https://wohektztnowdhcjqiztf.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_jlG9K3HW9aWCRk8Aa4Re4w_1EUeHkzP";
 
-let lobbyChannel = null, lobbyPresence = null;
+let lobbyChannel = null;
+let onlineReady = false;
+let onlineClient = null;
 const peerId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
 const lobbyListeners = [];
 
@@ -125,24 +125,53 @@ function peersFromState(state) {
   const result = [];
   Object.entries(state || {}).forEach(([key, entries]) => {
     (entries || []).forEach(p => result.push({
-      id: key, isMe: key === peerId, presence: p || {}
+      id: key,
+      isMe: key === peerId || p.peerId === peerId,
+      presence: p || {}
     }));
   });
   return result;
 }
 
+function waitForSubscribe(channel, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error("Connection timed out")), timeoutMs);
+    function finish(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      err ? reject(err) : resolve();
+    }
+    channel.subscribe(status => {
+      if (status === "SUBSCRIBED") finish();
+      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        finish(new Error("Supabase Realtime status: " + status));
+      }
+    });
+  });
+}
+
 async function connectOnline() {
-  const configured = SUPABASE_URL.startsWith("https://") &&
-    !SUPABASE_URL.includes("PASTE_") && SUPABASE_ANON_KEY.length > 20 &&
-    !SUPABASE_ANON_KEY.includes("PASTE_");
-  if (!configured || !window.supabase?.createClient) {
-    $("status").textContent = "Setup needed: add your Supabase URL + anon key in the code to enable real online servers.";
+  const status = $("status");
+  const joinButton = $("joinBtn");
+  joinButton.disabled = true;
+  joinButton.textContent = "CONNECTING...";
+  status.textContent = "Connecting to multiplayer...";
+
+  if (!SUPABASE_URL.startsWith("https://") || !SUPABASE_ANON_KEY.startsWith("sb_publishable_") || !window.supabase?.createClient) {
+    status.textContent = "Multiplayer setup problem: check the Supabase URL, publishable key, and internet connection.";
+    joinButton.disabled = false;
+    joinButton.textContent = "JOIN";
     return;
   }
 
   try {
-    const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    lobbyChannel = client.channel("text-game-public-lobby", {
+    onlineClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      realtime: { params: { eventsPerSecond: 10 } }
+    });
+
+    lobbyChannel = onlineClient.channel("text-game-public-lobby", {
       config: { presence: { key: peerId } }
     });
 
@@ -150,81 +179,132 @@ async function connectOnline() {
       const peers = peersFromState(lobbyChannel.presenceState());
       counts = {};
       peers.forEach(p => {
-        const s = p.presence?.srv;
-        if (typeof s === "string" && /^[a-z0-9-]{1,30}$/.test(s)) {
-          counts[s] = (counts[s] || 0) + 1;
-          if (!known[s] && typeof p.presence.label === "string") known[s] = p.presence.label.slice(0, 30);
+        const serverId = p.presence?.srv;
+        if (typeof serverId === "string" && /^[a-z0-9-]{1,30}$/.test(serverId)) {
+          counts[serverId] = (counts[serverId] || 0) + 1;
+          if (!known[serverId] && typeof p.presence.label === "string") {
+            known[serverId] = p.presence.label.slice(0, 30);
+          }
         }
       });
       renderServers();
       lobbyListeners.forEach(fn => fn({ peers }));
     });
 
-    const result = await lobbyChannel.subscribe(status => {
-      if (status === "SUBSCRIBED") {
-        $("status").textContent = "Online service connected. Join a server to meet real players.";
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        $("status").textContent = "Online connection problem. Check your Supabase setup.";
-      } else if (status === "CLOSED") {
-        $("status").textContent = "Disconnected from online service.";
-      }
-    });
+    await waitForSubscribe(lobbyChannel);
 
+    // The multiplayer adapter is only exposed after the lobby connection is live.
     room = {
-      onPeers(fn) { lobbyListeners.push(fn); },
+      onPeers(fn) {
+        lobbyListeners.push(fn);
+        fn({ peers: peersFromState(lobbyChannel.presenceState()) });
+      },
       async presence(data) {
-        lobbyPresence = data;
-        if (lobbyChannel) {
-          if (data?.srv) await lobbyChannel.track({ ...data, peerId });
-          else await lobbyChannel.untrack();
-        }
+        if (data?.srv) await lobbyChannel.track({ ...data, peerId });
+        else await lobbyChannel.untrack();
       },
       async join(channelName) {
-        const channel = client.channel("text-game-" + channelName, {
-          config: { presence: { key: peerId } }
+        const channel = onlineClient.channel("text-game-" + channelName, {
+          config: {
+            presence: { key: peerId },
+            broadcast: { self: false, ack: true }
+          }
         });
         const handlers = { chat: [], gif: [], peers: [] };
         let currentPeers = [];
-        channel.on("broadcast", { event: "chat" }, ({ payload }) => handlers.chat.forEach(fn => fn({ data: payload, isMe: payload.peerId === peerId })));
-        channel.on("broadcast", { event: "gif" }, ({ payload }) => handlers.gif.forEach(fn => fn({ data: payload, isMe: payload.peerId === peerId })));
-        channel.on("presence", { event: "sync" }, () => {
+        let presenceSynced = false;
+        let resolveSync;
+        const syncReady = new Promise(resolve => { resolveSync = resolve; });
+
+        const refreshPeers = () => {
           currentPeers = peersFromState(channel.presenceState());
           handlers.peers.forEach(fn => fn({ peers: currentPeers, joined: [], left: [] }));
+        };
+
+        channel.on("broadcast", { event: "chat" }, ({ payload }) => {
+          handlers.chat.forEach(fn => fn({ data: payload, isMe: payload?.peerId === peerId }));
+        });
+        channel.on("broadcast", { event: "gif" }, ({ payload }) => {
+          handlers.gif.forEach(fn => fn({ data: payload, isMe: payload?.peerId === peerId }));
+        });
+        channel.on("presence", { event: "sync" }, () => {
+          presenceSynced = true;
+          refreshPeers();
+          resolveSync();
         });
         channel.on("presence", { event: "join" }, ({ newPresences }) => {
-          const joined = (newPresences || []).map(p => ({ presence: p, isMe: p.peerId === peerId }));
+          currentPeers = peersFromState(channel.presenceState());
+          const joined = (newPresences || []).map(p => ({
+            presence: p,
+            isMe: p.peerId === peerId
+          }));
           handlers.peers.forEach(fn => fn({ peers: currentPeers, joined, left: [] }));
         });
         channel.on("presence", { event: "leave" }, ({ leftPresences }) => {
-          const left = (leftPresences || []).map(p => ({ presence: p, isMe: p.peerId === peerId }));
+          currentPeers = peersFromState(channel.presenceState());
+          const left = (leftPresences || []).map(p => ({
+            presence: p,
+            isMe: p.peerId === peerId
+          }));
           handlers.peers.forEach(fn => fn({ peers: currentPeers, joined: [], left }));
         });
 
-        await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error("Room connection timed out")), 12000);
-          channel.subscribe(status => {
-            if (status === "SUBSCRIBED") { clearTimeout(timeout); resolve(); }
-            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") { clearTimeout(timeout); reject(new Error(status)); }
-          });
-        });
+        try {
+          await waitForSubscribe(channel);
+          // Initial presence sync normally arrives with SUBSCRIBED. Don't fail a
+          // valid room if the sync callback is a little slower; peers() reads fresh state.
+          if (!presenceSynced) await Promise.race([syncReady, new Promise(resolve => setTimeout(resolve, 1800))]);
+          currentPeers = peersFromState(channel.presenceState());
+        } catch (err) {
+          await onlineClient.removeChannel(channel);
+          throw err;
+        }
 
-        const wrapped = {
-          peers: () => currentPeers,
-          async presence(data) { await channel.track({ ...data, peerId }); },
-          on(topic, fn) { if (handlers[topic]) handlers[topic].push(fn); return () => { handlers[topic] = handlers[topic].filter(x => x !== fn); }; },
-          onPeers(fn) { handlers.peers.push(fn); return () => { handlers.peers = handlers.peers.filter(x => x !== fn); }; },
-          async emit(topic, data) {
-            await channel.send({ type: "broadcast", event: topic, payload: { ...data, peerId } });
+        return {
+          peers: () => peersFromState(channel.presenceState()),
+          async presence(data) {
+            await channel.track({ ...data, peerId });
+            currentPeers = peersFromState(channel.presenceState());
+            handlers.peers.forEach(fn => fn({ peers: currentPeers, joined: [], left: [] }));
           },
-          async leave() { await channel.untrack(); await client.removeChannel(channel); }
+          on(topic, fn) {
+            if (!handlers[topic]) return () => {};
+            handlers[topic].push(fn);
+            return () => { handlers[topic] = handlers[topic].filter(x => x !== fn); };
+          },
+          onPeers(fn) {
+            handlers.peers.push(fn);
+            fn({ peers: peersFromState(channel.presenceState()), joined: [], left: [] });
+            return () => { handlers.peers = handlers.peers.filter(x => x !== fn); };
+          },
+          async emit(topic, data) {
+            if (topic !== "chat" && topic !== "gif") throw new Error("Unknown message type");
+            const result = await channel.send({
+              type: "broadcast",
+              event: topic,
+              payload: { ...data, peerId }
+            });
+            if (result !== "ok") throw new Error("Broadcast failed: " + result);
+          },
+          async leave() {
+            try { await channel.untrack(); } catch (e) {}
+            await onlineClient.removeChannel(channel);
+          }
         };
-        return wrapped;
       }
     };
+
+    onlineReady = true;
+    status.textContent = "ONLINE SERVICE CONNECTED. Choose a server and join your friend.";
+    joinButton.disabled = false;
+    joinButton.textContent = "JOIN";
   } catch (err) {
-    console.error("Online multiplayer connection failed:", err);
+    console.error("Supabase connection failed:", err);
     room = null;
-    $("status").textContent = "Could not connect. Check your Supabase URL, key, and Realtime settings.";
+    onlineReady = false;
+    status.textContent = "Can't connect to Supabase: " + (err?.message || "check internet, project URL, key, and Realtime");
+    joinButton.disabled = false;
+    joinButton.textContent = "RETRY / JOIN";
   }
 }
 connectOnline();
@@ -281,23 +361,40 @@ $("joinBtn").onclick = async () => {
   if (!n) { $("err").textContent = "Pick a username."; return; }
   if (!selected) { $("err").textContent = "Pick or create a server."; return; }
   $("err").textContent = "";
+  if (!onlineReady || !room) {
+    $("err").textContent = "Multiplayer isn't connected yet. Check the connection status below and try again.";
+    return;
+  }
   me = n; srv = selected; label = known[srv] || srv;
   nr = null;
-  if (room) {
-    try {
-      nr = await room.join("s-" + srv);
-      await new Promise(r => setTimeout(r, 1200)); // let existing players report in
-      const taken = nr.peers().some(p => !p.isMe && String(p.presence?.name || "").toLowerCase() === n.toLowerCase());
-      if (taken) { await nr.leave(); nr = null; $("err").textContent = "That username is taken on this server."; return; }
-      await nr.presence({ name: n });
-      await room.presence({ srv, label, name: n });
-    } catch (e) { nr = null; $("err").textContent = "Couldn’t reach the server; playing solo."; }
+  const joinButton = $("joinBtn");
+  joinButton.disabled = true;
+  try {
+    nr = await room.join("s-" + srv);
+    // Give the initial Presence sync time to include everyone already in this room.
+    await new Promise(r => setTimeout(r, 350));
+    const taken = nr.peers().some(p => !p.isMe && String(p.presence?.name || "").toLowerCase() === n.toLowerCase());
+    if (taken) {
+      await nr.leave(); nr = null;
+      $("err").textContent = "That username is already being used in this server. Choose another.";
+      joinButton.disabled = false;
+      return;
+    }
+    await nr.presence({ name: n });
+    await room.presence({ srv, label, name: n });
+  } catch (e) {
+    console.error("Room join failed:", e);
+    if (nr) { try { await nr.leave(); } catch (_) {} nr = null; }
+    $("err").textContent = "Couldn't join online server: " + (e?.message || "check connection and try again");
+    joinButton.disabled = false;
+    return;
   }
+  joinButton.disabled = false;
   try { localStorage.setItem("tg_user", n); } catch (e) {}
   $("title").textContent = "# " + label + "  (" + me + ")";
   $("log").innerHTML = ""; settled = false;
   $("login").classList.add("hidden"); $("chat").classList.remove("hidden");
-  sys(nr ? "ONLINE. Real players can see your messages." : "Offline preview. Add Supabase keys to enable real players.");
+  sys("ONLINE. Real players in this server can see your messages.");
   if (nr) {
     unsubs.push(nr.on("chat", m => showText(m, m.isMe)));
     unsubs.push(nr.on("gif", m => showGif(m, m.isMe)));
@@ -310,8 +407,6 @@ $("joinBtn").onclick = async () => {
       }
     }));
     setTimeout(() => settled = true, 2000);
-  } else {
-    $("users").textContent = me;
   }
   $("text").focus();
 };
@@ -326,8 +421,18 @@ $("leaveBtn").onclick = async () => {
 
 // ---- send ----
 async function out(topic, data) {
-  if (nr) { try { await nr.emit(topic, data); } catch (e) { sys("Message didn’t send."); } }
-  else { const m = { data }; topic === "chat" ? showText(m, true) : showGif(m, true); }
+  if (!nr) { sys("You're not connected to a multiplayer server. Rejoin to send messages."); return; }
+  // Supabase Broadcast is configured with self:false, so render the sender's
+  // copy locally and send one copy to everyone else in the room.
+  const localMessage = { data: { ...data, peerId } };
+  if (topic === "chat") showText(localMessage, true);
+  else if (topic === "gif") showGif(localMessage, true);
+  try {
+    await nr.emit(topic, data);
+  } catch (e) {
+    console.error("Message send failed:", e);
+    sys("Message may not have reached the other players: " + (e?.message || "send failed"));
+  }
 }
 function sendText() {
   const t = $("text").value.trim(); if (!t) return;
