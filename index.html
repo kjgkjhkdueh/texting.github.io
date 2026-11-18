@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Text Game</title>
+<title>TEXT GAME // ONLINE MULTIPLAYER</title>
 <style>
   :root { color-scheme: dark; --bg:#000; --fg:#e6e6e6; --green:#0f0; --blue:#4cf; --dim:#777; --line:#222;
     box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -47,7 +47,7 @@
   @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.3)} }
   .bounce{animation:bounce .6s infinite} .spin{animation:spin 1.2s linear infinite}
   .shake{animation:shake .3s infinite} .pulse{animation:pulse .8s infinite}
-  @media (max-width:600px){ #side{display:none} }
+  @media (max-width:600px){ #side{display:none} #top{flex-wrap:wrap} #bar{gap:6px} #bar button{padding:8px} #log{padding:10px} }
 </style>
 </head>
 <body>
@@ -76,6 +76,7 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const $ = id => document.getElementById(id);
 const ANIMS = [["🎉","bounce"],["😂","shake"],["❤️","pulse"],["🌀","spin"],["🔥","pulse"],["👋","shake"],["😎","bounce"],["💀","shake"]];
@@ -109,24 +110,124 @@ $("newBtn").onclick = () => {
   known[k] = n.slice(0, 30); selected = k; $("newname").value = ""; renderServers();
 };
 
-// ---- connect to the live lobby (page also works alone if this is null) ----
-(async () => {
-  try { room = await claude.use("room"); } catch (e) { room = null; }
-  if (!room) { $("status").textContent = "Offline: open this while signed in to claude.ai to meet real players."; return; }
-  $("status").textContent = "Connecting…";
-  room.onConnection(c => { $("status").textContent = c ? "Connected. Real players show up in the counts." : "Reconnecting…"; });
-  room.onPeers(ch => {
-    counts = {};
-    ch.peers.forEach(p => {
-      const s = p.presence && p.presence.srv;
-      if (typeof s === "string" && /^[a-z0-9-]{1,30}$/.test(s)) {
-        counts[s] = (counts[s] || 0) + 1;
-        if (!known[s] && typeof p.presence.label === "string") known[s] = p.presence.label.slice(0, 30);
+// ---- REAL ONLINE MULTIPLAYER (Supabase Realtime) ----
+// 1) Create a free project at https://supabase.com
+// 2) In Project Settings > API, copy Project URL and anon/public key below.
+// 3) In Supabase > Database > Replication / Realtime, make sure Realtime is enabled.
+const SUPABASE_URL = "https://wohektztnowdhcjqiztf.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_jlG9K3HW9aWCRk8Aa4Re4w_1EUeHkzP";
+
+let lobbyChannel = null, lobbyPresence = null;
+const peerId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+const lobbyListeners = [];
+
+function peersFromState(state) {
+  const result = [];
+  Object.entries(state || {}).forEach(([key, entries]) => {
+    (entries || []).forEach(p => result.push({
+      id: key, isMe: key === peerId, presence: p || {}
+    }));
+  });
+  return result;
+}
+
+async function connectOnline() {
+  const configured = SUPABASE_URL.startsWith("https://") &&
+    !SUPABASE_URL.includes("PASTE_") && SUPABASE_ANON_KEY.length > 20 &&
+    !SUPABASE_ANON_KEY.includes("PASTE_");
+  if (!configured || !window.supabase?.createClient) {
+    $("status").textContent = "Setup needed: add your Supabase URL + anon key in the code to enable real online servers.";
+    return;
+  }
+
+  try {
+    const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    lobbyChannel = client.channel("text-game-public-lobby", {
+      config: { presence: { key: peerId } }
+    });
+
+    lobbyChannel.on("presence", { event: "sync" }, () => {
+      const peers = peersFromState(lobbyChannel.presenceState());
+      counts = {};
+      peers.forEach(p => {
+        const s = p.presence?.srv;
+        if (typeof s === "string" && /^[a-z0-9-]{1,30}$/.test(s)) {
+          counts[s] = (counts[s] || 0) + 1;
+          if (!known[s] && typeof p.presence.label === "string") known[s] = p.presence.label.slice(0, 30);
+        }
+      });
+      renderServers();
+      lobbyListeners.forEach(fn => fn({ peers }));
+    });
+
+    const result = await lobbyChannel.subscribe(status => {
+      if (status === "SUBSCRIBED") {
+        $("status").textContent = "Online service connected. Join a server to meet real players.";
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        $("status").textContent = "Online connection problem. Check your Supabase setup.";
+      } else if (status === "CLOSED") {
+        $("status").textContent = "Disconnected from online service.";
       }
     });
-    renderServers();
-  });
-})();
+
+    room = {
+      onPeers(fn) { lobbyListeners.push(fn); },
+      async presence(data) {
+        lobbyPresence = data;
+        if (lobbyChannel) {
+          if (data?.srv) await lobbyChannel.track({ ...data, peerId });
+          else await lobbyChannel.untrack();
+        }
+      },
+      async join(channelName) {
+        const channel = client.channel("text-game-" + channelName, {
+          config: { presence: { key: peerId } }
+        });
+        const handlers = { chat: [], gif: [], peers: [] };
+        let currentPeers = [];
+        channel.on("broadcast", { event: "chat" }, ({ payload }) => handlers.chat.forEach(fn => fn({ data: payload, isMe: payload.peerId === peerId })));
+        channel.on("broadcast", { event: "gif" }, ({ payload }) => handlers.gif.forEach(fn => fn({ data: payload, isMe: payload.peerId === peerId })));
+        channel.on("presence", { event: "sync" }, () => {
+          currentPeers = peersFromState(channel.presenceState());
+          handlers.peers.forEach(fn => fn({ peers: currentPeers, joined: [], left: [] }));
+        });
+        channel.on("presence", { event: "join" }, ({ newPresences }) => {
+          const joined = (newPresences || []).map(p => ({ presence: p, isMe: p.peerId === peerId }));
+          handlers.peers.forEach(fn => fn({ peers: currentPeers, joined, left: [] }));
+        });
+        channel.on("presence", { event: "leave" }, ({ leftPresences }) => {
+          const left = (leftPresences || []).map(p => ({ presence: p, isMe: p.peerId === peerId }));
+          handlers.peers.forEach(fn => fn({ peers: currentPeers, joined: [], left }));
+        });
+
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("Room connection timed out")), 12000);
+          channel.subscribe(status => {
+            if (status === "SUBSCRIBED") { clearTimeout(timeout); resolve(); }
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") { clearTimeout(timeout); reject(new Error(status)); }
+          });
+        });
+
+        const wrapped = {
+          peers: () => currentPeers,
+          async presence(data) { await channel.track({ ...data, peerId }); },
+          on(topic, fn) { if (handlers[topic]) handlers[topic].push(fn); return () => { handlers[topic] = handlers[topic].filter(x => x !== fn); }; },
+          onPeers(fn) { handlers.peers.push(fn); return () => { handlers.peers = handlers.peers.filter(x => x !== fn); }; },
+          async emit(topic, data) {
+            await channel.send({ type: "broadcast", event: topic, payload: { ...data, peerId } });
+          },
+          async leave() { await channel.untrack(); await client.removeChannel(channel); }
+        };
+        return wrapped;
+      }
+    };
+  } catch (err) {
+    console.error("Online multiplayer connection failed:", err);
+    room = null;
+    $("status").textContent = "Could not connect. Check your Supabase URL, key, and Realtime settings.";
+  }
+}
+connectOnline();
 
 // ---- sounds (generated with Web Audio, no files) ----
 let ac = null, muted = false;
@@ -196,7 +297,7 @@ $("joinBtn").onclick = async () => {
   $("title").textContent = "# " + label + "  (" + me + ")";
   $("log").innerHTML = ""; settled = false;
   $("login").classList.add("hidden"); $("chat").classList.remove("hidden");
-  sys(nr ? "Connected. Messages are live and not saved." : "Solo mode: nobody else can see this.");
+  sys(nr ? "ONLINE. Real players can see your messages." : "Offline preview. Add Supabase keys to enable real players.");
   if (nr) {
     unsubs.push(nr.on("chat", m => showText(m, m.isMe)));
     unsubs.push(nr.on("gif", m => showGif(m, m.isMe)));
@@ -230,14 +331,14 @@ async function out(topic, data) {
 }
 function sendText() {
   const t = $("text").value.trim(); if (!t) return;
-  out("chat", { name: me, text: t }); $("text").value = "";
+  out("chat", { name: me, text: t, peerId }); $("text").value = "";
 }
 $("send").onclick = sendText;
 $("text").onkeydown = e => { if (e.key === "Enter") sendText(); };
 
 ANIMS.forEach(([e, a]) => {
   const b = document.createElement("button"); b.textContent = e;
-  b.onclick = () => { out("gif", { name: me, e, a }); $("tray").classList.add("hidden"); };
+  b.onclick = () => { out("gif", { name: me, e, a, peerId }); $("tray").classList.add("hidden"); };
   $("gifs").appendChild(b);
 });
 $("gifBtn").onclick = () => $("tray").classList.toggle("hidden");
