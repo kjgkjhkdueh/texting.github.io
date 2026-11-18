@@ -1,561 +1,246 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Napoleon: Naval Empire [NEON OVERDRIVE EDITION]</title>
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            user-select: none;
-        }
-        body, html {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            font-family: 'Courier New', monospace;
-            background-color: #030712;
-            color: #f3f4f6;
-        }
-        #gameCanvas {
-            display: block;
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 1;
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Text Game</title>
+<style>
+  :root { color-scheme: dark; --bg:#000; --fg:#e6e6e6; --green:#0f0; --blue:#4cf; --dim:#777; --line:#222;
+    box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font-family: "Courier New", monospace; }
+  button { background:#111; color:var(--green); border:1px solid var(--green); padding:8px 14px; font-family:inherit; cursor:pointer; }
+  button:hover, button.sel { background:var(--green); color:#000; }
+  input { background:#000; color:#fff; border:1px solid #444; padding:10px; font-family:inherit; font-size:16px; }
+  input:focus { outline:1px solid var(--green); }
+  .hidden { display:none !important; }
+
+  #login { max-width:420px; margin:0 auto; padding:8vh 20px; }
+  #login h1 { color:var(--green); margin-bottom:24px; }
+  #login input { width:100%; margin-bottom:16px; }
+  .server { display:flex; justify-content:space-between; width:100%; margin-bottom:8px; text-align:left; }
+  #newrow { display:flex; gap:8px; margin:12px 0; }
+  #newrow input { margin:0; flex:1; }
+  #err { color:#f55; min-height:20px; margin:10px 0; }
+  #status { color:var(--dim); font-size:12px; margin-top:14px; }
+
+  #chat { display:flex; height:100%; }
+  #side { width:170px; border-right:1px solid var(--line); padding:12px; overflow-y:auto; }
+  #side h3 { color:var(--green); margin:0 0 8px; font-size:14px; }
+  #main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #top { padding:10px 14px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  #log { flex:1; overflow-y:auto; padding:14px; }
+  .msg { margin-bottom:10px; word-wrap:break-word; }
+  .who { color:var(--green); } .me .who { color:var(--blue); }
+  .sys { color:var(--dim); font-style:italic; margin-bottom:10px; }
+  .anim { display:inline-block; font-size:56px; margin-top:6px; }
+
+  #tray { border-top:1px solid var(--line); padding:10px; background:#080808; }
+  #gifs { display:flex; gap:10px; overflow-x:auto; }
+  #gifs button { font-size:32px; padding:6px 12px; }
+  #bar { display:flex; gap:8px; padding:10px; border-top:1px solid var(--line); }
+  #bar input { flex:1; min-width:0; }
+
+  @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-14px)} }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.3)} }
+  .bounce{animation:bounce .6s infinite} .spin{animation:spin 1.2s linear infinite}
+  .shake{animation:shake .3s infinite} .pulse{animation:pulse .8s infinite}
+  @media (max-width:600px){ #side{display:none} }
+</style>
 </head>
 <body>
-    <canvas id="gameCanvas"></canvas>
 
-    <script>
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
+<div id="login">
+  <h1>&gt; TEXT GAME_</h1>
+  <input id="username" placeholder="username" maxlength="20" autocomplete="off">
+  <div id="servers"></div>
+  <div id="newrow"><input id="newname" placeholder="or create a new server" maxlength="30" autocomplete="off"><button id="newBtn">CREATE</button></div>
+  <div id="err"></div>
+  <button id="joinBtn">JOIN</button>
+  <div id="status"></div>
+</div>
 
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
+<div id="chat" class="hidden">
+  <div id="side"><h3>ONLINE</h3><div id="users"></div></div>
+  <div id="main">
+    <div id="top"><span id="title"></span><span><button id="muteBtn">SOUND ON</button> <button id="leaveBtn">LEAVE</button></span></div>
+    <div id="log"></div>
+    <div id="tray" class="hidden"><div id="gifs"></div></div>
+    <div id="bar">
+      <button id="gifBtn">GIF</button>
+      <input id="text" placeholder="type a message..." maxlength="500" autocomplete="off">
+      <button id="send">SEND</button>
+    </div>
+  </div>
+</div>
 
-        // 10x cooler cyberpunk-historical glowing palette
-        const CLR_OCEAN = '#060b13';
-        const CLR_CYAN = '#00f2ff';
-        const CLR_NEON_RED = '#ff0055';
-        const CLR_GOLD = '#ffbc00';
-        const CLR_HUD_BG = '#090d16';
-        const CLR_HUD_BORDER = '#38bdf8';
-        const CLR_WHITE = '#ffffff';
+<script>
+const $ = id => document.getElementById(id);
+const ANIMS = [["🎉","bounce"],["😂","shake"],["❤️","pulse"],["🌀","spin"],["🔥","pulse"],["👋","shake"],["😎","bounce"],["💀","shake"]];
+const ANIM_OK = new Set(["bounce","spin","shake","pulse"]);
+const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
+const known = { general:"General", gaming:"Gaming", music:"Music", "late-night":"Late Night" };
+let room = null, nr = null, me = "", srv = null, label = "", selected = null, counts = {}, unsubs = [], settled = false;
 
-        let gameState = 'MENU'; 
-        let selectedShip = null;
-        let mouseX = 0, mouseY = 0;
-        let frameCount = 0;
+try { $("username").value = localStorage.getItem("tg_user") || ""; } catch (e) {}
 
-        // Upgraded Global Modifiers
-        const systems = {
-            goldDoubloons: 1000, // 10x more starting money
-            score: 0,
-            combo: 0,
-            comboTimer: 0,
-            windAngle: 0,
-            windSpeed: 2.5
-        };
+// ---- server list (defaults + any server someone created) ----
+function renderServers() {
+  const keys = Object.keys(known);
+  Object.keys(counts).forEach(k => { if (!keys.includes(k)) keys.push(k); });
+  $("servers").innerHTML = "";
+  keys.forEach(k => {
+    const b = document.createElement("button");
+    b.className = "server" + (k === selected ? " sel" : "");
+    b.innerHTML = "<span></span><span></span>";
+    b.children[0].textContent = known[k] || k;
+    b.children[1].textContent = (counts[k] || 0) + " online";
+    b.onclick = () => { selected = k; renderServers(); };
+    $("servers").appendChild(b);
+  });
+}
+renderServers();
 
-        const shopItems = [
-            { name: "☢️ Plasma Hull Matrices (+500 HP)", cost: 400, bought: false },
-            { name: "⚡ Overcharged Volley Rail-Cannons (+100% Damage)", cost: 600, bought: false },
-            { name: "🌌 Hyperspace Rudders (+200% Turn Rate & Max Speed)", cost: 300, bought: false }
-        ];
+$("newBtn").onclick = () => {
+  const n = $("newname").value.trim(), k = slug(n);
+  if (!k) return;
+  known[k] = n.slice(0, 30); selected = k; $("newname").value = ""; renderServers();
+};
 
-        // Hyper Camera System (Intense Screen Shake + Vector Lag)
-        const camera = {
-            shakeIntensity: 0,
-            shakeDuration: 0,
-            dx: 0,
-            dy: 0,
-            triggerShake(intensity, duration) {
-                if (intensity > this.shakeIntensity) {
-                    this.shakeIntensity = intensity;
-                    this.shakeDuration = duration;
-                }
-            },
-            update() {
-                if (this.shakeDuration > 0) {
-                    this.dx = (Math.random() - 0.5) * this.shakeIntensity * 3;
-                    this.dy = (Math.random() - 0.5) * this.shakeIntensity * 3;
-                    this.shakeDuration--;
-                    if (this.shakeDuration === 0) this.shakeIntensity = 0;
-                } else {
-                    this.dx += (0 - this.dx) * 0.15;
-                    this.dy += (0 - this.dy) * 0.15;
-                }
-            }
-        };
+// ---- connect to the live lobby (page also works alone if this is null) ----
+(async () => {
+  try { room = await claude.use("room"); } catch (e) { room = null; }
+  if (!room) { $("status").textContent = "Offline: open this while signed in to claude.ai to meet real players."; return; }
+  $("status").textContent = "Connecting…";
+  room.onConnection(c => { $("status").textContent = c ? "Connected. Real players show up in the counts." : "Reconnecting…"; });
+  room.onPeers(ch => {
+    counts = {};
+    ch.peers.forEach(p => {
+      const s = p.presence && p.presence.srv;
+      if (typeof s === "string" && /^[a-z0-9-]{1,30}$/.test(s)) {
+        counts[s] = (counts[s] || 0) + 1;
+        if (!known[s] && typeof p.presence.label === "string") known[s] = p.presence.label.slice(0, 30);
+      }
+    });
+    renderServers();
+  });
+})();
 
-        // Advanced Visual FX Suite (Glowing Neon Trails, Plasma Shockwaves, Floating Damage Text)
-        const fxManager = {
-            particles: [],
-            shockwaves: [],
-            floatingText: [],
-            spawnThrusterGlow(x, y, color) {
-                this.particles.push({
-                    type: 'trail', x: x, y: y,
-                    vx: (Math.random() - 0.5) * 1, vy: (Math.random() - 0.5) * 1,
-                    radius: Math.random() * 4 + 2, alpha: 1, decay: 0.03, color: color
-                });
-            },
-            spawnPlasmaBlast(x, y, color) {
-                for (let i = 0; i < 20; i++) {
-                    let ang = Math.random() * Math.PI * 2;
-                    let mag = Math.random() * 6 + 2;
-                    this.particles.push({
-                        type: 'spark', x: x, y: y,
-                        vx: Math.cos(ang) * mag, vy: Math.sin(ang) * mag,
-                        radius: Math.random() * 3 + 2, alpha: 1, decay: 0.02, color: color
-                    });
-                }
-                this.shockwaves.push({ x: x, y: y, radius: 5, maxRadius: 60, alpha: 1, color: color });
-            },
-            spawnDamageText(x, y, text, color) {
-                this.floatingText.push({ x: x, y: y, text: text, color: color, alpha: 1, vy: -1.5 });
-            },
-            update() {
-                // Particles
-                for (let i = this.particles.length - 1; i >= 0; i--) {
-                    let p = this.particles[i];
-                    p.x += p.vx; p.y += p.vy;
-                    p.alpha -= p.decay;
-                    if (p.type === 'trail') p.radius *= 0.95;
-                    if (p.alpha <= 0) this.particles.splice(i, 1);
-                }
-                // Shockwaves
-                for (let i = this.shockwaves.length - 1; i >= 0; i--) {
-                    let s = this.shockwaves[i];
-                    s.radius += 4;
-                    s.alpha -= 0.04;
-                    if (s.alpha <= 0 || s.radius >= s.maxRadius) this.shockwaves.splice(i, 1);
-                }
-                // Floating text
-                for (let i = this.floatingText.length - 1; i >= 0; i--) {
-                    let t = this.floatingText[i];
-                    t.y += t.vy;
-                    t.alpha -= 0.02;
-                    if (t.alpha <= 0) this.floatingText.splice(i, 1);
-                }
-            },
-            draw(ctx) {
-                ctx.save();
-                // Draw shockwaves
-                for (let s of this.shockwaves) {
-                    ctx.strokeStyle = s.color;
-                    ctx.globalAlpha = s.alpha;
-                    ctx.lineWidth = 3;
-                    ctx.shadowBlur = 15; ctx.shadowColor = s.color;
-                    ctx.beginPath();
-                    ctx.arc(s.x + camera.dx, s.y + camera.dy, s.radius, 0, Math.PI * 2);
-                    ctx.stroke();
-                }
-                // Draw particles
-                ctx.shadowBlur = 10;
-                for (let p of this.particles) {
-                    ctx.fillStyle = p.color;
-                    ctx.globalAlpha = p.alpha;
-                    ctx.shadowColor = p.color;
-                    ctx.beginPath();
-                    ctx.arc(p.x + camera.dx, p.y + camera.dy, p.radius, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-                // Draw Floating texts
-                ctx.shadowBlur = 0;
-                ctx.textAlign = 'center';
-                ctx.font = 'bold 16px "Courier New"';
-                for (let t of this.floatingText) {
-                    ctx.fillStyle = t.color;
-                    ctx.globalAlpha = t.alpha;
-                    ctx.fillText(t.text, t.x + camera.dx, t.y + camera.dy);
-                }
-                ctx.restore();
-            }
-        };
+// ---- sounds (generated with Web Audio, no files) ----
+let ac = null, muted = false;
+try { muted = localStorage.getItem("tg_mute") === "1"; } catch (e) {}
+function unlock() { try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === "suspended") ac.resume(); } catch (e) {} }
+function tone(f, d, t = "square", v = 0.05, at = 0) {
+  if (muted) return;
+  try {
+    unlock();
+    const o = ac.createOscillator(), g = ac.createGain(), s = ac.currentTime + at;
+    o.type = t; o.frequency.setValueAtTime(f, s);
+    g.gain.setValueAtTime(v, s); g.gain.exponentialRampToValueAtTime(0.0001, s + d);
+    o.connect(g); g.connect(ac.destination); o.start(s); o.stop(s + d);
+  } catch (e) {}
+}
+const SFX = {
+  send:  () => tone(660, .08, "square"),
+  recv:  () => { tone(520, .07, "triangle", .07); tone(780, .1, "triangle", .07, .07); },
+  join:  () => { tone(440, .08, "sine", .08); tone(660, .12, "sine", .08, .09); },
+  leave: () => { tone(660, .08, "sine", .08); tone(440, .12, "sine", .08, .09); },
+  gif:   () => { tone(500, .07, "square"); tone(700, .07, "square", .05, .07); tone(900, .1, "square", .05, .14); }
+};
+function setMute(m) { muted = m; try { localStorage.setItem("tg_mute", m ? "1" : "0"); } catch (e) {} $("muteBtn").textContent = m ? "SOUND OFF" : "SOUND ON"; }
+$("muteBtn").onclick = () => setMute(!muted);
+setMute(muted);
 
-        // CannonBall Class (Neon railgun shots)
-        class LaserShell {
-            constructor(x, y, vx, vy, color, faction) {
-                this.x = x; this.y = y; this.vx = vx; this.vy = vy;
-                this.color = color; this.faction = faction;
-                this.age = 0; this.maxAge = 80;
-            }
-            update() {
-                this.x += this.vx; this.y += this.vy;
-                fxManager.spawnThrusterGlow(this.x, this.y, this.color);
-                this.age++;
-            }
-            draw(ctx) {
-                ctx.save();
-                ctx.shadowBlur = 15; ctx.shadowColor = this.color;
-                ctx.fillStyle = '#ffffff';
-                ctx.beginPath();
-                ctx.arc(this.x + camera.dx, this.y + camera.dy, 5, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.restore();
-            }
-        }
-        const activeProjectiles = [];
+// ---- log helpers (all text via textContent) ----
+function add(n) { $("log").appendChild(n); $("log").scrollTop = $("log").scrollHeight; }
+function sys(t) { const d = document.createElement("div"); d.className = "sys"; d.textContent = "* " + t; add(d); }
+function line(name, mine) {
+  const d = document.createElement("div"); d.className = "msg" + (mine ? " me" : "");
+  const w = document.createElement("span"); w.className = "who"; w.textContent = String(name).slice(0, 20) + ": ";
+  d.appendChild(w); return d;
+}
+function showText(m, mine) {
+  if (typeof m.data?.text !== "string") return;
+  const d = line(m.data.name, mine); d.appendChild(document.createTextNode(m.data.text.slice(0, 500))); add(d); mine ? SFX.send() : SFX.recv();
+}
+function showGif(m, mine) {
+  const e = m.data?.e, a = m.data?.a;
+  if (typeof e !== "string" || e.length > 8 || !ANIM_OK.has(a)) return;
+  const d = line(m.data.name, mine); const s = document.createElement("span");
+  s.className = "anim " + a; s.textContent = e;
+  d.appendChild(document.createElement("br")); d.appendChild(s); add(d); SFX.gif();
+}
 
-        // Ship Class (Cyber-Dreadnought Hull Arrays)
-        class Dreadnought {
-            constructor(x, y, faction, name) {
-                this.x = x; this.y = y; this.faction = faction; this.name = name;
-                this.angle = faction === 'French' ? 0 : Math.PI;
-                this.speed = 0;
-                this.maxSpeed = faction === 'French' ? 2.5 : 2.0;
-                this.turnSpeed = 0.03;
-                this.health = 600; this.maxHealth = 600;
-                this.selected = false; this.isSunk = false;
-                this.reloadTimer = 0; this.reloadCooldown = 80; // Rapid firing!
-                this.length = 60; this.width = 22;
-                this.tx = x; this.ty = y;
-                this.glowColor = faction === 'French' ? CLR_CYAN : CLR_NEON_RED;
-            }
-            navigate(tx, ty) {
-                if (!this.isSunk) { this.tx = tx; this.ty = ty; }
-            }
-            update() {
-                if (this.isSunk) return;
+// ---- join / leave ----
+$("joinBtn").onclick = async () => {
+  unlock();
+  const n = $("username").value.trim();
+  if (!n) { $("err").textContent = "Pick a username."; return; }
+  if (!selected) { $("err").textContent = "Pick or create a server."; return; }
+  $("err").textContent = "";
+  me = n; srv = selected; label = known[srv] || srv;
+  nr = null;
+  if (room) {
+    try {
+      nr = await room.join("s-" + srv);
+      await new Promise(r => setTimeout(r, 1200)); // let existing players report in
+      const taken = nr.peers().some(p => !p.isMe && String(p.presence?.name || "").toLowerCase() === n.toLowerCase());
+      if (taken) { await nr.leave(); nr = null; $("err").textContent = "That username is taken on this server."; return; }
+      await nr.presence({ name: n });
+      await room.presence({ srv, label, name: n });
+    } catch (e) { nr = null; $("err").textContent = "Couldn’t reach the server; playing solo."; }
+  }
+  try { localStorage.setItem("tg_user", n); } catch (e) {}
+  $("title").textContent = "# " + label + "  (" + me + ")";
+  $("log").innerHTML = ""; settled = false;
+  $("login").classList.add("hidden"); $("chat").classList.remove("hidden");
+  sys(nr ? "Connected. Messages are live and not saved." : "Solo mode: nobody else can see this.");
+  if (nr) {
+    unsubs.push(nr.on("chat", m => showText(m, m.isMe)));
+    unsubs.push(nr.on("gif", m => showGif(m, m.isMe)));
+    unsubs.push(nr.onPeers(ch => {
+      $("users").innerHTML = "";
+      ch.peers.forEach(p => { const d = document.createElement("div"); d.textContent = String(p.presence?.name || "someone").slice(0, 20) + (p.isMe ? " (you)" : ""); $("users").appendChild(d); });
+      if (settled) {
+        ch.joined.forEach(p => { if (!p.isMe) { sys(String(p.presence?.name || "someone").slice(0, 20) + " joined."); SFX.join(); } });
+        ch.left.forEach(p => { sys(String(p.presence?.name || "someone").slice(0, 20) + " left."); SFX.leave(); });
+      }
+    }));
+    setTimeout(() => settled = true, 2000);
+  } else {
+    $("users").textContent = me;
+  }
+  $("text").focus();
+};
+$("username").onkeydown = e => { if (e.key === "Enter") $("joinBtn").click(); };
 
-                // Dynamic item upgrades application
-                if (this.faction === 'French') {
-                    if (shopItems[2].bought) { this.maxSpeed = 5.0; this.turnSpeed = 0.08; }
-                }
+$("leaveBtn").onclick = async () => {
+  unsubs.forEach(u => u()); unsubs = [];
+  if (nr) { try { await nr.leave(); } catch (e) {} nr = null; }
+  if (room) { try { await room.presence({ srv: null, label: null, name: null }); } catch (e) {} }
+  $("chat").classList.add("hidden"); $("login").classList.remove("hidden"); $("tray").classList.add("hidden");
+};
 
-                let dx = this.tx - this.x; let dy = this.ty - this.y; let dist = Math.hypot(dx, dy);
-                if (dist > 25) {
-                    let targetAngle = Math.atan2(dy, dx);
-                    let diff = (targetAngle - this.angle + Math.PI) % (Math.PI * 2) - Math.PI;
-                    this.angle += Math.min(this.turnSpeed, Math.max(-this.turnSpeed, diff));
-                    this.speed = Math.min(this.speed + 0.08, this.maxSpeed);
-                } else { this.speed *= 0.88; }
+// ---- send ----
+async function out(topic, data) {
+  if (nr) { try { await nr.emit(topic, data); } catch (e) { sys("Message didn’t send."); } }
+  else { const m = { data }; topic === "chat" ? showText(m, true) : showGif(m, true); }
+}
+function sendText() {
+  const t = $("text").value.trim(); if (!t) return;
+  out("chat", { name: me, text: t }); $("text").value = "";
+}
+$("send").onclick = sendText;
+$("text").onkeydown = e => { if (e.key === "Enter") sendText(); };
 
-                this.x += Math.cos(this.angle) * this.speed;
-                this.y += Math.sin(this.angle) * this.speed;
-
-                // Spawn glowing neon engine trails
-                let ex = this.x - Math.cos(this.angle) * (this.length / 2);
-                let ey = this.y - Math.sin(this.angle) * (this.length / 2);
-                fxManager.spawnThrusterGlow(ex, ey, this.glowColor);
-
-                if (this.reloadTimer > 0) this.reloadTimer--;
-            }
-            fireBroadside(side) {
-                if (this.isSunk || this.reloadTimer > 0) return;
-                this.reloadTimer = this.reloadCooldown;
-                camera.triggerShake(15, 15); // Multiplied blast force
-
-                let fireAngle = this.angle + (side === 'left' ? -Math.PI / 2 : Math.PI / 2);
-                let count = 6; // 10x cooler: More gun batteries!
-
-                for (let i = -3; i <= 3; i++) {
-                    if (i === 0) continue;
-                    let offset = i * 7;
-                    let hx = this.x + Math.cos(this.angle) * offset;
-                    let hy = this.y + Math.sin(this.angle) * offset;
-                    let spread = fireAngle + (Math.random() - 0.5) * 0.08;
-                    let bSpeed = Math.random() * 2 + 9; // Ultra fast projectiles
-
-                    activeProjectiles.push(new LaserShell(hx, hy, Math.cos(spread) * bSpeed, Math.sin(spread) * bSpeed, this.glowColor, this.faction));
-                }
-                fxManager.spawnPlasmaBlast(this.x + Math.cos(fireAngle)*15, this.y + Math.sin(fireAngle)*15, this.glowColor);
-            }
-            draw(ctx) {
-                let px = this.x + camera.dx; let py = this.y + camera.dy;
-                if (this.isSunk) {
-                    ctx.save(); ctx.translate(px, py); ctx.rotate(this.angle);
-                    ctx.fillStyle = '#111827'; ctx.beginPath();
-                    ctx.ellipse(0, 0, this.length/2, this.width/2, 0, 0, Math.PI*2); ctx.fill();
-                    ctx.restore(); return;
-                }
-
-                ctx.save();
-                ctx.translate(px, py);
-                ctx.rotate(this.angle);
-
-                // Hyper Glow Shield Grid
-                if (this.selected) {
-                    ctx.shadowBlur = 20; ctx.shadowColor = CLR_GOLD;
-                    ctx.strokeStyle = CLR_GOLD; ctx.lineWidth = 2;
-                    ctx.strokeRect(-this.length/2 - 6, -this.width/2 - 6, this.length + 12, this.width + 12);
-                }
-
-                // Sleek Neon Chassis
-                ctx.shadowBlur = 12; ctx.shadowColor = this.glowColor;
-                ctx.fillStyle = '#1e293b'; ctx.strokeStyle = this.glowColor; ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(this.length/2, 0);
-                ctx.lineTo(this.length/4, -this.width/2);
-                ctx.lineTo(-this.length/2, -this.width/2);
-                ctx.lineTo(-this.length/2, this.width/2);
-                ctx.lineTo(this.length/4, this.width/2);
-                ctx.closePath(); ctx.fill(); ctx.stroke();
-
-                // Cyber energy lines
-                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1;
-                ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(15, 0); ctx.stroke();
-
-                ctx.restore();
-
-                // Advanced Status Bar (Health & Reload Overlay)
-                let barW = 50; let bx = px - barW/2; let by = py - 35;
-                ctx.fillStyle = '#374151'; ctx.fillRect(bx, by, barW, 4);
-                ctx.fillStyle = this.glowColor; ctx.fillRect(bx, by, barW * (this.health / this.maxHealth), 4);
-                // Reload micro-progress dot
-                if (this.reloadTimer > 0) {
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(bx, by + 5, barW * (1 - this.reloadTimer / this.reloadCooldown), 2);
-                }
-            }
-        }
-
-        const playerFleet = [
-            new Dreadnought(300, 220, 'French', "N-1 CORE OVERLORD"),
-            new Dreadnought(300, 440, 'French', "N-2 ECLIPSE RAIDER"),
-            new Dreadnought(300, 660, 'French', "N-3 VOID FRIGATE")
-        ];
-
-        const enemyFleet = [
-            new Dreadnought(canvas.width - 300, 250, 'British', "BR-X COALITION BEHEMOTH"),
-            new Dreadnought(canvas.width - 300, 470, 'British', "BR-Y TITAN SLAYER"),
-            new Dreadnought(canvas.width - 300, 690, 'British', "BR-Z REAPER ENGINE")
-        ];
-
-        // Controls Matrices Mapping System
-        window.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
-        window.addEventListener('mousedown', (e) => {
-            if (gameState === 'MENU') {
-                if (mouseX >= uiSystem.menuButtons.play.x && mouseX <= uiSystem.menuButtons.play.x + uiSystem.menuButtons.play.w &&
-                    mouseY >= uiSystem.menuButtons.play.y && mouseY <= uiSystem.menuButtons.play.y + uiSystem.menuButtons.play.h) {
-                    gameState = 'PLAY';
-                } else if (mouseX >= uiSystem.menuButtons.shop.x && mouseX <= uiSystem.menuButtons.shop.x + uiSystem.menuButtons.shop.w &&
-                           mouseY >= uiSystem.menuButtons.shop.y && mouseY <= uiSystem.menuButtons.shop.y + uiSystem.menuButtons.shop.h) {
-                    gameState = 'SHOP';
-                }
-            } else if (gameState === 'SHOP') {
-                if (mouseX >= 100 && mouseX <= 340 && mouseY >= canvas.height - 120 && mouseY <= canvas.height - 75) gameState = 'MENU';
-                shopItems.forEach((item, idx) => {
-                    let bx = 100, by = 220 + idx * 80, bw = canvas.width - 200, bh = 60;
-                    if (mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh && !item.bought && systems.goldDoubloons >= item.cost) {
-                        systems.goldDoubloons -= item.cost; item.bought = true;
-                        if (idx === 0) playerFleet.forEach(s => { s.maxHealth += 500; s.health += 500; });
-                    }
-                });
-            } else if (gameState === 'PLAY' && mouseY < canvas.height - 140) {
-                if (e.button === 0) {
-                    selectedShip = null;
-                    playerFleet.forEach(s => {
-                        s.selected = false;
-                        if (Math.hypot(s.x - mouseX, s.y - mouseY) < 45) { s.selected = true; selectedShip = s; }
-                    });
-                }
-            }
-        });
-
-        window.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            if (gameState === 'PLAY' && selectedShip && mouseY < canvas.height - 140) {
-                selectedShip.navigate(mouseX, mouseY);
-                fxManager.spawnPlasmaBlast(mouseX, mouseY, CLR_CYAN); // Flash marker click
-            }
-        });
-
-        window.addEventListener('keydown', (e) => {
-            if (gameState === 'PLAY' && selectedShip) {
-                if (e.key === 'q' || e.key === 'Q') selectedShip.fireBroadside('left');
-                if (e.key === 'e' || e.key === 'E') selectedShip.fireBroadside('right');
-            }
-        });
-
-        // UI Suite Engine
-        const uiSystem = {
-            menuButtons: { play: { x: 0, y: 0, w: 300, h: 50 }, shop: { x: 0, y: 0, w: 300, h: 50 } },
-            drawMainMenu(ctx) {
-                ctx.fillStyle = CLR_OCEAN; ctx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                // Holographic Matrix Grid Backboard lines
-                ctx.strokeStyle = 'rgba(0, 242, 255, 0.05)'; ctx.lineWidth = 1;
-                for (let i = 0; i < canvas.width; i += 50) {
-                    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
-                }
-
-                ctx.textAlign = 'center';
-                ctx.shadowBlur = 30; ctx.shadowColor = CLR_CYAN;
-                ctx.fillStyle = CLR_CYAN; ctx.font = 'black 52px "Courier New"';
-                ctx.fillText("⚡ NAPOLEON: NEON OVERDRIVE ⚡", canvas.width / 2, canvas.height / 2 - 160);
-
-                ctx.shadowBlur = 10; ctx.fillStyle = CLR_WHITE; ctx.font = '16px "Courier New"';
-                ctx.fillText("TACTICAL CYBER-EMPIRE VECTOR COMBAT SHIP SIMULATOR", canvas.width / 2, canvas.height / 2 - 100);
-
-                ctx.fillStyle = CLR_GOLD; ctx.font = 'bold 18px "Courier New"';
-                ctx.fillText(`[ QUANTUM RESERVES: ${systems.goldDoubloons} CRIT-COINS ]`, canvas.width / 2, canvas.height / 2 - 50);
-
-                this.menuButtons.play = { x: canvas.width/2 - 150, y: canvas.height/2 + 20, w: 300, h: 55 };
-                this.menuButtons.shop = { x: canvas.width/2 - 150, y: canvas.height/2 + 95, w: 300, h: 55 };
-
-                for (let key in this.menuButtons) {
-                    let btn = this.menuButtons[key];
-                    let isHover = mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h;
-                    ctx.shadowBlur = isHover ? 25 : 5; ctx.shadowColor = isHover ? CLR_CYAN : '#1d4ed8';
-                    ctx.fillStyle = isHover ? '#0284c7' : '#0369a1'; ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
-                    ctx.strokeStyle = CLR_CYAN; ctx.strokeRect(btn.x, btn.y, btn.w, btn.h);
-                    ctx.fillStyle = CLR_WHITE; ctx.font = 'bold 18px "Courier New"';
-                    ctx.fillText(key.toUpperCase() + " SYSTEM", btn.x + btn.w/2, btn.y + btn.h/2 + 6);
-                }
-            },
-            drawShopMenu(ctx) {
-                ctx.fillStyle = '#020617'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.strokeStyle = CLR_HUD_BORDER; ctx.strokeRect(50, 50, canvas.width - 100, canvas.height - 100);
-
-                ctx.textAlign = 'left'; ctx.fillStyle = CLR_CYAN; ctx.font = 'bold 38px "Courier New"';
-                ctx.fillText("⚡ RE-ENGINERING NANOTECH WING", 100, 110);
-                ctx.fillStyle = CLR_WHITE; ctx.font = '16px "Courier New"';
-                ctx.fillText(`AVAILABLE BALANCE: ${systems.goldDoubloons} MATRIX CREDITS`, 100, 155);
-
-                this.shopItems = shopItems;
-                this.shopItems.forEach((item, idx) => {
-                    let bx = 100, by = 220 + idx * 80, bw = canvas.width - 200, bh = 60;
-                    let isHover = mouseX >= bx && mouseX <= bx + bw && mouseY >= by && mouseY <= by + bh;
-                    ctx.fillStyle = isHover ? '#0f172a' : '#020617'; ctx.fillRect(bx, by, bw, bh);
-                    ctx.strokeStyle = item.bought ? CLR_GOLD : CLR_HUD_BORDER; ctx.strokeRect(bx, by, bw, bh);
-                    ctx.fillStyle = CLR_WHITE; ctx.fillText(`${item.name} -> [ ${item.bought ? "LINK INTEGRATED" : "COST: " + item.cost + " CRIT"} ]`, 130, by + 36);
-                });
-
-                let esc = { x: 100, y: canvas.height - 120, w: 240, h: 45 };
-                ctx.fillStyle = '#991b1b'; ctx.fillRect(esc.x, esc.y, esc.w, esc.h);
-                ctx.fillStyle = CLR_WHITE; ctx.textAlign = 'center'; ctx.fillText("CONFIRM RETURN", esc.x + esc.w/2, esc.y + esc.h/2 + 5);
-            },
-            drawCombatHud(ctx, selectedShip, activeFr, activeBr) {
-                const hY = canvas.height - 140;
-                ctx.fillStyle = CLR_HUD_BG; ctx.fillRect(0, hY, canvas.width, 140);
-                ctx.strokeStyle = CLR_HUD_BORDER; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.moveTo(0, hY); ctx.lineTo(canvas.width, hY); ctx.stroke();
-
-                // Dynamic headcounts with cyber layouts
-                ctx.textAlign = 'left'; ctx.font = 'bold 14px "Courier New"';
-                ctx.fillStyle = CLR_CYAN; ctx.fillText(`⚡ EMPIRE FLEET: [ ${activeFr} OVERLORDS ONLINE ]`, 40, hY + 35);
-                ctx.fillStyle = CLR_NEON_RED; ctx.fillText(`🚨 COALITION TARGETS: [ ${activeBr} ALIVE ]`, 40, hY + 60);
-
-                ctx.fillStyle = CLR_GOLD;
-                ctx.fillText(`💰 BANKING CREDITS: ${systems.goldDoubloons} COINS  || SCORE: ${systems.score} [COMBO x${systems.combo}]`, 40, hY + 90);
-
-                if (selectedShip) {
-                    ctx.fillStyle = CLR_WHITE;
-                    ctx.fillText(`ACTIVE CONTROLLER LINK -> ${selectedShip.name} // BURST CHARGE: ${selectedShip.reloadTimer === 0 ? 'READY' : 'CHARGING'}`, 40, hY + 120);
-                } else {
-                    ctx.fillStyle = '#4b5563'; ctx.fillText("SELECT AN ARMORED DRIVETRAIN SYSTEM DREADNOUGHT TO INITIATE VECTOR MATRIX FIRING ROUTINES.", 40, hY + 120);
-                }
-            }
-        };
-
-        // Main Core Execution Dynamic Frames Loop
-        function mainLoop() {
-            frameCount++;
-            if (gameState === 'PLAY') {
-                camera.update();
-                fxManager.update();
-
-                // Dynamic combo reduction timers over clock cycles
-                if (systems.comboTimer > 0) {
-                    systems.comboTimer--;
-                    if (systems.comboTimer === 0) systems.combo = 0;
-                }
-
-                // Systems updates
-                playerFleet.forEach(s => s.update());
-                enemyFleet.forEach(es => {
-                    if (es.isSunk) return;
-                    es.update();
-                    let livePlayers = playerFleet.filter(p => !p.isSunk);
-                    if (livePlayers.length > 0) {
-                        let target = livePlayers[0];
-                        es.navigate(target.x, target.y);
-                        if (Math.hypot(target.x - es.x, target.y - es.y) < 320 && es.reloadTimer === 0) {
-                            es.fireBroadside(Math.random() > 0.5 ? 'left' : 'right');
-                        }
-                    }
-                });
-
-                // Laser shells vector track matrix validation loop bounds check
-                for (let i = activeProjectiles.length - 1; i >= 0; i--) {
-                    let b = activeProjectiles[i];
-                    b.update();
-
-                    let targets = b.faction === 'French' ? enemyFleet : playerFleet;
-                    let hit = false;
-                    for (let t of targets) {
-                        if (!t.isSunk && Math.hypot(t.x - b.x, t.y - b.y) < 26) {
-                            let dmg = Math.floor(Math.random() * 40) + 50;
-                            if (b.faction === 'French' && shopItems[1].bought) dmg *= 2.0; // Overcharged multiply railguns!
-                            
-                            t.health -= dmg; hit = true;
-                            fxManager.spawnPlasmaBlast(b.x, b.y, b.color);
-                            fxManager.spawnDamageText(b.x, b.y, `-${dmg} HP`, b.color);
-                            camera.triggerShake(12, 8);
-
-                            if (t.health <= 0) {
-                                t.isSunk = true;
-                                fxManager.spawnPlasmaBlast(t.x, t.y, '#ffffff');
-                                camera.triggerShake(30, 25); // Ultra colossal destruction screen shake shake
-                                if (b.faction === 'French') {
-                                    systems.combo++;
-                                    systems.comboTimer = 200;
-                                    let payout = (Math.floor(Math.random() * 100) + 200) * (1 + systems.combo * 0.5);
-                                    systems.goldDoubloons += Math.floor(payout);
-                                    systems.score += 1000 * systems.combo;
-                                    fxSystemString = `FATAL CRIT SINK!! +${Math.floor(payout)} GOLD`;
-                                    fxManager.spawnDamageText(t.x, t.y, fxSystemString, CLR_GOLD);
-                                }
-                            }
-                            break;
-                        }
-                    }
-                    if (hit || b.age >= b.maxAge) activeProjectiles.splice(i, 1);
-                }
-            }
-
-            // RENDERING CANVAS BLITTING LAYERS DELEGATE
-            if (gameState === 'MENU') uiSystem.drawMainMenu(ctx);
-            else if (gameState === 'SHOP') uiSystem.drawShopMenu(ctx);
-            else if (gameState === 'PLAY') {
-                ctx.fillStyle = CLR_OCEAN; ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                // Holographic tactical vector sonar lines mapping nodes
-                ctx.strokeStyle = 'rgba(0, 242, 255, 0.03)'; ctx.lineWidth = 1;
-                for (let x = 0; x < canvas.width; x += 60) {
-                    ctx.beginPath(); ctx.moveTo(x + camera.dx, 0); ctx.lineTo(x + camera.dx, canvas.height - 140); ctx.stroke();
-                }
-                for (let y = 0; y < canvas.height - 140; y += 60) {
-                    ctx.beginPath(); ctx.moveTo(0, y + camera.dy); ctx.lineTo(canvas.width, y + camera.dy); ctx.stroke();
-                }
-
-                // Canvas Raster array loops
-                playerFleet.concat(enemyFleet).forEach(ship => ship.draw(ctx));
-                activeProjectiles.forEach(p => p.draw(ctx));
-                fxManager.draw(ctx);
-
-                let fr = playerFleet.filter(s => !s.isSunk).length;
-                let br = enemyFleet.filter(s => !s.isSunk).length;
-                uiSystem.drawCombatHud(ctx, selectedShip, fr, br);
-            }
-
-            requestAnimationFrame(mainLoop);
-        }
-
-        mainLoop();
-    </script>
+ANIMS.forEach(([e, a]) => {
+  const b = document.createElement("button"); b.textContent = e;
+  b.onclick = () => { out("gif", { name: me, e, a }); $("tray").classList.add("hidden"); };
+  $("gifs").appendChild(b);
+});
+$("gifBtn").onclick = () => $("tray").classList.toggle("hidden");
+</script>
 </body>
 </html>
