@@ -34,6 +34,11 @@
   .who { color:var(--green); } .me .who { color:var(--blue); }
   .sys { color:var(--dim); font-style:italic; margin-bottom:10px; }
   .anim { display:inline-block; font-size:56px; margin-top:6px; }
+  .chatgif { display:block; max-width:min(320px,80vw); max-height:240px; margin-top:8px; border:1px solid #333; }
+  #modPanel { position:fixed; z-index:5; right:12px; top:58px; width:min(300px,90vw); max-height:65vh; overflow:auto; background:#080808; border:1px solid var(--green); padding:12px; box-shadow:0 0 20px #0f04; }
+  #modPanel h3 { color:var(--green); margin:0 0 10px; }
+  .moduser { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:8px 0; }
+  .moduser button { padding:5px 8px; }
 
   #tray { border-top:1px solid var(--line); padding:10px; background:#080808; }
   #gifs { display:flex; gap:10px; overflow-x:auto; }
@@ -65,9 +70,12 @@
 <div id="chat" class="hidden">
   <div id="side"><h3>ONLINE</h3><div id="users"></div></div>
   <div id="main">
-    <div id="top"><span id="title"></span><span><button id="muteBtn">SOUND ON</button> <button id="leaveBtn">LEAVE</button></span></div>
+    <div id="top"><span id="title"></span><span><button id="inviteBtn">INVITE</button> <button id="modBtn" class="hidden">MOD</button> <button id="muteBtn">SOUND ON</button> <button id="leaveBtn">LEAVE</button></span></div>
     <div id="log"></div>
-    <div id="tray" class="hidden"><div id="gifs"></div></div>
+    <div id="tray" class="hidden">
+      <div id="gifs"></div>
+      <div style="display:flex;gap:8px;margin-top:8px"><input id="gifUrl" placeholder="paste a direct animated .gif URL..." style="flex:1;min-width:0"><button id="sendGifUrl">SEND GIF</button></div>
+    </div>
     <div id="bar">
       <button id="gifBtn">GIF</button>
       <input id="text" placeholder="type a message..." maxlength="500" autocomplete="off">
@@ -84,6 +92,7 @@ const ANIM_OK = new Set(["bounce","spin","shake","pulse"]);
 const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
 const known = { general:"General", gaming:"Gaming", music:"Music", "late-night":"Late Night" };
 let room = null, nr = null, me = "", srv = null, label = "", selected = null, counts = {}, unsubs = [], settled = false;
+let ownerPeerId = null, iAmOwner = false, roomPeers = [];
 
 try { $("username").value = localStorage.getItem("tg_user") || ""; } catch (e) {}
 
@@ -210,7 +219,7 @@ async function connectOnline() {
             broadcast: { self: false, ack: true }
           }
         });
-        const handlers = { chat: [], gif: [], peers: [] };
+        const handlers = { chat: [], gif: [], kick: [], peers: [] };
         let currentPeers = [];
         let presenceSynced = false;
         let resolveSync;
@@ -278,7 +287,7 @@ async function connectOnline() {
             return () => { handlers.peers = handlers.peers.filter(x => x !== fn); };
           },
           async emit(topic, data) {
-            if (topic !== "chat" && topic !== "gif") throw new Error("Unknown message type");
+            if (topic !== "chat" && topic !== "gif" && topic !== "kick") throw new Error("Unknown message type");
             const result = await channel.send({
               type: "broadcast",
               event: topic,
@@ -347,11 +356,22 @@ function showText(m, mine) {
   const d = line(m.data.name, mine); d.appendChild(document.createTextNode(m.data.text.slice(0, 500))); add(d); mine ? SFX.send() : SFX.recv();
 }
 function showGif(m, mine) {
+  const d = line(m.data?.name || "someone", mine);
+  if (typeof m.data?.url === "string") {
+    try {
+      const u = new URL(m.data.url);
+      if (u.protocol !== "https:" || !/\\.(gif)(?:$|[?#])/i.test(u.href)) return;
+      const img = document.createElement("img");
+      img.className = "chatgif"; img.src = u.href; img.alt = "Animated GIF";
+      img.loading = "lazy"; d.appendChild(document.createElement("br")); d.appendChild(img);
+      add(d); SFX.gif(); return;
+    } catch (e) { return; }
+  }
   const e = m.data?.e, a = m.data?.a;
   if (typeof e !== "string" || e.length > 8 || !ANIM_OK.has(a)) return;
-  const d = line(m.data.name, mine); const s = document.createElement("span");
-  s.className = "anim " + a; s.textContent = e;
-  d.appendChild(document.createElement("br")); d.appendChild(s); add(d); SFX.gif();
+  const span = document.createElement("span");
+  span.className = "anim " + a; span.textContent = e;
+  d.appendChild(document.createElement("br")); d.appendChild(span); add(d); SFX.gif();
 }
 
 // ---- join / leave ----
@@ -400,7 +420,11 @@ $("joinBtn").onclick = async () => {
     unsubs.push(nr.on("gif", m => showGif(m, m.isMe)));
     unsubs.push(nr.onPeers(ch => {
       $("users").innerHTML = "";
-      ch.peers.forEach(p => { const d = document.createElement("div"); d.textContent = String(p.presence?.name || "someone").slice(0, 20) + (p.isMe ? " (you)" : ""); $("users").appendChild(d); });
+      roomPeers = ch.peers;
+      const owner = ch.peers.find(p => p.presence?.ownerPeerId);
+      if (owner) { ownerPeerId = owner.presence.ownerPeerId; iAmOwner = ownerPeerId === peerId; }
+      $("modBtn").classList.toggle("hidden", !iAmOwner);
+      ch.peers.forEach(p => { const d = document.createElement("div"); d.textContent = String(p.presence?.name || "someone").slice(0, 20) + (p.isMe ? " (you)" : "") + ((p.presence?.ownerPeerId) ? " ★" : ""); $("users").appendChild(d); });
       if (settled) {
         ch.joined.forEach(p => { if (!p.isMe) { sys(String(p.presence?.name || "someone").slice(0, 20) + " joined."); SFX.join(); } });
         ch.left.forEach(p => { sys(String(p.presence?.name || "someone").slice(0, 20) + " left."); SFX.leave(); });
